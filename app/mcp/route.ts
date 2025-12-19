@@ -108,7 +108,21 @@ const handler = createMcpHandler(async (server) => {
     })
   );
 
-  const blackboxAppUrl = process.env.NEXT_PUBLIC_BLACKBOX_APP_URL || 'http://localhost:3001'
+  // Get OAuth server URL with better error handling
+  function getOAuthServerUrl(): string {
+    const url = process.env.NEXT_PUBLIC_BLACKBOX_APP_URL || 
+                process.env.BLACKBOX_APP_URL || 
+                'http://localhost:3001'
+    
+    if (!url || url === 'undefined') {
+      console.error('NEXT_PUBLIC_BLACKBOX_APP_URL is not set!')
+      throw new Error('OAuth server URL is not configured. Please set NEXT_PUBLIC_BLACKBOX_APP_URL environment variable.')
+    }
+    
+    return url
+  }
+  
+  const blackboxAppUrl = getOAuthServerUrl()
   
   // Define tool with securitySchemes (mcp-handler types may not include it yet)
   const toolDefinition = {

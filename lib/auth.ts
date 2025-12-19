@@ -7,12 +7,16 @@ import type { User, TokenValidationResponse } from '@/types/auth'
 const TOKEN_KEY = 'blackbox_oauth_token'
 
 function getBlackboxAppUrl(): string {
-  if (typeof window !== 'undefined') {
-    // Client-side: use public env var
-    return process.env.NEXT_PUBLIC_BLACKBOX_APP_URL || 'http://localhost:3001'
+  const url = typeof window !== 'undefined'
+    ? process.env.NEXT_PUBLIC_BLACKBOX_APP_URL || 'http://localhost:3001'
+    : process.env.BLACKBOX_APP_URL || process.env.NEXT_PUBLIC_BLACKBOX_APP_URL || 'http://localhost:3001'
+  
+  if (!url || url === 'undefined') {
+    console.error('BLACKBOX_APP_URL is not set!')
+    throw new Error('OAuth server URL is not configured. Please set NEXT_PUBLIC_BLACKBOX_APP_URL (client) or BLACKBOX_APP_URL (server) environment variable.')
   }
-  // Server-side: use server env var
-  return process.env.BLACKBOX_APP_URL || process.env.NEXT_PUBLIC_BLACKBOX_APP_URL || 'http://localhost:3001'
+  
+  return url
 }
 
 /**

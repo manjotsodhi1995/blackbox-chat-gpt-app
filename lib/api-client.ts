@@ -5,10 +5,16 @@
 import { getAuthToken, getOAuthUrl } from './auth'
 
 function getBlackboxAppUrl(): string {
-  if (typeof window !== 'undefined') {
-    return process.env.NEXT_PUBLIC_BLACKBOX_APP_URL || 'http://localhost:3001'
+  const url = typeof window !== 'undefined'
+    ? process.env.NEXT_PUBLIC_BLACKBOX_APP_URL || 'http://localhost:3001'
+    : process.env.BLACKBOX_APP_URL || process.env.NEXT_PUBLIC_BLACKBOX_APP_URL || 'http://localhost:3001'
+  
+  if (!url || url === 'undefined') {
+    console.error('BLACKBOX_APP_URL is not set!')
+    throw new Error('OAuth server URL is not configured. Please set NEXT_PUBLIC_BLACKBOX_APP_URL (client) or BLACKBOX_APP_URL (server) environment variable.')
   }
-  return process.env.BLACKBOX_APP_URL || process.env.NEXT_PUBLIC_BLACKBOX_APP_URL || 'http://localhost:3001'
+  
+  return url
 }
 
 export interface ApiClientOptions extends RequestInit {
