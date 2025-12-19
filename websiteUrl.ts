@@ -1,5 +1,5 @@
 export const websiteURL = (() => {
-  const url = process.env.BLACKBOX_V0CC_URL ||
+  const url = process.env.BLACKBOX_APP_URL ||
     (process.env.NODE_ENV === "development"
       ? "http://localhost:3000"
       : "https://" +
@@ -10,7 +10,7 @@ export const websiteURL = (() => {
   // Log the URL being used (only in development)
   if (process.env.NODE_ENV === "development") {
     console.log("[MCP] Using website URL:", url);
-    console.log("[MCP] BLACKBOX_V0CC_URL:", process.env.BLACKBOX_V0CC_URL || "not set");
+    console.log("[MCP] BLACKBOX_APP_URL:", process.env.BLACKBOX_APP_URL || "not set");
   }
   
   return url;
