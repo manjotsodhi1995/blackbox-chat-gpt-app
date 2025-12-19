@@ -1,4 +1,5 @@
 import { baseURL } from "@/baseUrl";
+import { websiteURL } from "@/websiteUrl";
 import { createMcpHandler } from "mcp-handler";
 import { z } from "zod";
 
@@ -94,6 +95,152 @@ const handler = createMcpHandler(async (server) => {
         },
         _meta: widgetMeta(contentWidget),
       };
+    }
+  );
+
+  // Build App Tool
+  server.registerTool(
+    "build_app",
+    {
+      title: "Build App",
+      description: "Build an app in blackbox-v0cc with a prompt. Creates a new app project based on the provided prompt.",
+      inputSchema: {
+        email: z.string().email().describe("The email address of the user building the app"),
+        prompt: z.string().describe("The prompt describing what app to build"),
+      },
+    },
+    async ({ email, prompt }) => {
+      try {
+        // Hardcoded session data
+        const session = {
+          user: {
+            name: 'Manjot Singh',
+            email: 'manjot.developer.singh@gmail.com',
+            image: 'https://lh3.googleusercontent.com/a/ACg8ocIkrnjRRyNOnywWdzJS7NzBypE5JapmH-_0XCRQeu26lxPY-Q=s96-c',
+            id: '4d1a58bd-d20c-4518-866b-18bc5d2a8113',
+            PhoneVerified: false,
+            customerId: 'cus_TPwkObTkcxoVCM'
+          },
+          expires: '2026-01-18T16:42:02.214Z',
+          isNewUser: false
+        };
+
+        const url = `${websiteURL}/api/mcp/build-app`;
+        console.log("[MCP build_app] Calling URL:", url);
+        console.log("[MCP build_app] Request body:", { email, prompt, session });
+        
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ email, prompt, session }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+          console.error("[MCP build_app] Error response:", response.status, errorData);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Failed to build app: ${errorData.error || errorData.message || `HTTP ${response.status}`}`,
+              },
+            ],
+          };
+        }
+
+        const data = await response.json();
+        return {
+          content: [
+            {
+              type: "text",
+              text: `App built successfully!\n\nChat ID: ${data.chatId}\nName: ${data.name}\nURL: ${data.url}`,
+            },
+          ],
+          structuredContent: {
+            chatId: data.chatId,
+            url: data.url,
+            name: data.name,
+            success: true,
+          },
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error building app: ${error instanceof Error ? error.message : "Unknown error"}`,
+            },
+          ],
+        };
+      }
+    }
+  );
+
+  // Check Credits Tool
+  server.registerTool(
+    "check_credits",
+    {
+      title: "Check Credits",
+      description: "Check available credits for a user in blackbox-v0cc",
+      inputSchema: {
+        email: z.string().email().describe("The email address of the user to check credits for"),
+      },
+    },
+    async ({ email }) => {
+      try {
+        const url = `${websiteURL}/api/mcp/credits?email=${encodeURIComponent(email)}`;
+        console.log("[MCP check_credits] Calling URL:", url);
+        
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+          console.error("[MCP check_credits] Error response:", response.status, errorData);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Failed to check credits: ${errorData.error || errorData.message || `HTTP ${response.status}`}`,
+              },
+            ],
+          };
+        }
+
+        const data = await response.json();
+        const creditsText = data.credits !== null ? `${data.credits.toFixed(2)} credits` : "No credits found";
+        const paymentMethodText = data.hasPaymentMethod ? "Yes" : "No";
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Credits for ${email}:\n\nAvailable: ${creditsText}\nHas Payment Method: ${paymentMethodText}${data.customerId ? `\nCustomer ID: ${data.customerId}` : ""}`,
+            },
+          ],
+          structuredContent: {
+            credits: data.credits || 0,
+            customerId: data.customerId || null,
+            hasPaymentMethod: data.hasPaymentMethod || false,
+            email,
+          },
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error checking credits: ${error instanceof Error ? error.message : "Unknown error"}`,
+            },
+          ],
+        };
+      }
     }
   );
 });
