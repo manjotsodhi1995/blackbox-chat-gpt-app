@@ -12,6 +12,20 @@ import { randomBytes } from "crypto";
  * For MCP servers, we use a simplified registration that returns a static
  * client configuration since we don't need per-client secrets.
  */
+
+// Handle OPTIONS for CORS preflight
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Max-Age": "86400",
+    },
+  });
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
@@ -61,6 +75,9 @@ export async function POST(request: Request) {
       headers: {
         "Content-Type": "application/json",
         "Cache-Control": "no-store",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
       },
       status: 201, // Created
     });
@@ -89,6 +106,9 @@ export async function GET() {
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": "public, max-age=3600",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
     },
   });
 }
