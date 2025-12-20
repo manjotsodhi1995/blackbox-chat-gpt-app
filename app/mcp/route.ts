@@ -402,29 +402,23 @@ const handler = createMcpHandler(async (server) => {
             },
           };
         } else {
-          console.log("[MCP check_auth_status] User not authenticated");
-          // Try to get more details about why
-          try {
-            const cookieStore = await cookies();
-            const authToken = cookieStore.get("auth_token");
-            const userSession = cookieStore.get("user_session");
-            console.log("[MCP check_auth_status] Cookie check:", {
-              hasAuthToken: !!authToken,
-              hasUserSession: !!userSession,
-            });
-          } catch (cookieError) {
-            console.error("[MCP check_auth_status] Error checking cookies:", cookieError);
-          }
+          console.log("[MCP check_auth_status] No session found (server-to-server requests don't include cookies)");
+          console.log("[MCP check_auth_status] Note: build_app will still work as backend accepts email-based requests");
           
+          // For server-to-server requests (ChatGPT backend), cookies won't be available
+          // But the backend API accepts email-based requests, so we can still proceed
+          // Return a status that allows tools to work with email
           return {
             content: [
               {
                 type: "text",
-                text: "Not authenticated. Please use the authenticate tool to log in.",
+                text: "No active session found in cookies (this is normal for server-to-server requests).\n\nYou can still use build_app and other tools by providing your email - the backend will handle authentication.\n\nTo establish a persistent session, complete OAuth authentication in your browser.",
               },
             ],
             structuredContent: {
               authenticated: false,
+              canProceedWithEmail: true, // Indicate that tools can work with email
+              message: "Server-to-server requests don't include browser cookies, but tools can work with email parameter",
             },
           };
         }
@@ -447,7 +441,7 @@ const handler = createMcpHandler(async (server) => {
     "build_app",
     {
       title: "Build App",
-      description: "Build an app in blackbox-v0cc with a prompt. Creates a new app project based on the provided prompt. Requires authentication.",
+      description: "Build an app in blackbox-v0cc with a prompt. Creates a new app project based on the provided prompt. Email is required - authentication will be handled by the backend.",
       inputSchema: {
         email: z.string().email().describe("The email address of the user building the app"),
         prompt: z.string().describe("The prompt describing what app to build"),
@@ -455,6 +449,9 @@ const handler = createMcpHandler(async (server) => {
     },
     async ({ email, prompt }) => {
       try {
+        console.log("[MCP build_app] ===== TOOL CALLED =====");
+        console.log("[MCP build_app] Input:", { email, promptLength: prompt?.length });
+        
         // Try to get authenticated session (may be null for server-to-server requests)
         const session = await getAuthenticatedSession();
         const cookieStore = await cookies();
@@ -466,6 +463,21 @@ const handler = createMcpHandler(async (server) => {
           hasAuthToken: !!authToken,
           sessionEmail: session?.user?.email,
         });
+        
+        // Validate inputs
+        if (!email) {
+          return {
+            content: [{ type: "text", text: "Email is required to build an app." }],
+            structuredContent: { error: "Email is required" },
+          };
+        }
+        
+        if (!prompt) {
+          return {
+            content: [{ type: "text", text: "Prompt is required to build an app." }],
+            structuredContent: { error: "Prompt is required" },
+          };
+        }
         
         // If we have a session, verify email matches
         if (session?.user?.email && session.user.email !== email) {
