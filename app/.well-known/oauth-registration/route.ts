@@ -49,23 +49,3 @@ export async function GET() {
 export async function POST(request: Request) {
   return notSupportedResponse();
 }
-
-/**
- * GET endpoint for registration endpoint discovery
- * Returns the registration endpoint URL
- */
-export async function GET() {
-  return NextResponse.json({
-    registration_endpoint: `${baseURL}/.well-known/oauth-registration`,
-    registration_endpoint_auth_methods_supported: ["none"],
-    scopes_supported: ["openid", "profile", "email"],
-  }, {
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "public, max-age=3600",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    },
-  });
-}
