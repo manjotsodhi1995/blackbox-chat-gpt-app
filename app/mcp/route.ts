@@ -34,7 +34,8 @@ function widgetMeta(widget: ContentWidget) {
 }
 
 // Helper function to get authenticated session with backend verification
-async function getAuthenticatedSession() {
+// Now supports both cookie-based and Redis-based token retrieval
+async function getAuthenticatedSession(email?: string) {
   try {
     const cookieStore = await cookies();
     const allCookies = cookieStore.getAll();
@@ -44,6 +45,7 @@ async function getAuthenticatedSession() {
       valueLength: c.value?.length || 0,
     })));
     
+    // First, try to get session from cookies (for browser requests)
     const session = await getSession();
     const authToken = await getAuthToken();
     
@@ -57,6 +59,41 @@ async function getAuthenticatedSession() {
     }
     if (authToken) {
       console.log("[MCP] Auth token exists, length:", authToken.length);
+    }
+    
+    // If we have cookies, use them (browser requests)
+    if (authToken && session) {
+      return session;
+    }
+    
+    // If no cookies but we have an email, try Redis storage (server-to-server requests)
+    if (!authToken && email) {
+      console.log("[MCP] No cookies found, trying Redis token storage for email:", email);
+      try {
+        const { getUserTokens } = await import("@/lib/token-storage");
+        const storedTokens = await getUserTokens(email);
+        
+        if (storedTokens) {
+          console.log("[MCP] ✅ Found stored tokens in Redis for:", email);
+          
+          // Check if token is expired and needs refresh
+          if (storedTokens.expires_at && storedTokens.expires_at < Date.now() / 1000) {
+            console.log("[MCP] Stored token expired, attempting refresh");
+            if (storedTokens.refresh_token) {
+              // Token refresh will be handled below
+              // For now, return the session from stored tokens
+              return storedTokens.session;
+            }
+          } else {
+            // Token is still valid, return session
+            return storedTokens.session;
+          }
+        } else {
+          console.log("[MCP] No stored tokens found in Redis for:", email);
+        }
+      } catch (redisError) {
+        console.error("[MCP] Error retrieving tokens from Redis:", redisError);
+      }
     }
     
     if (!authToken) {
@@ -133,6 +170,26 @@ async function getAuthenticatedSession() {
                 }
                 
                 console.log("[MCP] ✅ Token refreshed successfully");
+                
+                // Update Redis storage with new tokens if email is available
+                if (refreshedSession?.user?.email) {
+                  try {
+                    const { updateUserTokens } = await import("@/lib/token-storage");
+                    const expiresAt = expires_in 
+                      ? Math.floor(Date.now() / 1000) + expires_in 
+                      : Math.floor(Date.now() / 1000) + 3600;
+                    
+                    await updateUserTokens(refreshedSession.user.email, {
+                      access_token: access_token!,
+                      expires_at: expiresAt,
+                      session: refreshedSession,
+                    });
+                    console.log("[MCP] ✅ Updated tokens in Redis storage");
+                  } catch (redisError) {
+                    console.warn("[MCP] Failed to update Redis storage (non-critical):", redisError);
+                  }
+                }
+                
                 return refreshedSession;
               }
             }
@@ -211,6 +268,26 @@ async function getAuthenticatedSession() {
                 }
                 
                 console.log("[MCP] ✅ Token refreshed successfully");
+                
+                // Update Redis storage with new tokens if email is available
+                if (refreshedSession?.user?.email) {
+                  try {
+                    const { updateUserTokens } = await import("@/lib/token-storage");
+                    const expiresAt = expires_in 
+                      ? Math.floor(Date.now() / 1000) + expires_in 
+                      : Math.floor(Date.now() / 1000) + 3600;
+                    
+                    await updateUserTokens(refreshedSession.user.email, {
+                      access_token: access_token!,
+                      expires_at: expiresAt,
+                      session: refreshedSession,
+                    });
+                    console.log("[MCP] ✅ Updated tokens in Redis storage");
+                  } catch (redisError) {
+                    console.warn("[MCP] Failed to update Redis storage (non-critical):", redisError);
+                  }
+                }
+                
                 return refreshedSession || session;
               } else {
                 console.log("[MCP] Token refresh failed:", refreshResponse.status);
@@ -441,9 +518,9 @@ const handler = createMcpHandler(async (server) => {
     "build_app",
     {
       title: "Build App",
-      description: "Build an app in blackbox-v0cc with a prompt. Creates a new app project based on the provided prompt. Email is required - authentication will be handled by the backend.",
+      description: "Build an app in blackbox-v0cc with a prompt. Creates a new app project based on the provided prompt. If authenticated, uses your email automatically.",
       inputSchema: {
-        email: z.string().email().describe("The email address of the user building the app"),
+        email: z.string().email().optional().describe("The email address of the user building the app (optional if authenticated)"),
         prompt: z.string().describe("The prompt describing what app to build"),
       },
     },
@@ -452,22 +529,44 @@ const handler = createMcpHandler(async (server) => {
         console.log("[MCP build_app] ===== TOOL CALLED =====");
         console.log("[MCP build_app] Input:", { email, promptLength: prompt?.length });
         
-        // Try to get authenticated session (may be null for server-to-server requests)
-        const session = await getAuthenticatedSession();
+        // Try to get authenticated session FIRST (supports both cookies and Redis)
+        // Pass email to allow Redis lookup for server-to-server requests
+        const session = await getAuthenticatedSession(email);
         const cookieStore = await cookies();
-        const authToken = cookieStore.get("auth_token")?.value;
+        let authToken = cookieStore.get("auth_token")?.value;
+        
+        // If no token in cookies but we have email, try Redis
+        if (!authToken && email) {
+          try {
+            const { getUserTokens } = await import("@/lib/token-storage");
+            const storedTokens = await getUserTokens(email);
+            if (storedTokens?.access_token) {
+              authToken = storedTokens.access_token;
+              console.log("[MCP build_app] ✅ Retrieved token from Redis storage");
+            }
+          } catch (redisError) {
+            console.error("[MCP build_app] Error retrieving token from Redis:", redisError);
+          }
+        }
+        
+        // Use authenticated user's email if available, otherwise use provided email
+        const userEmail = session?.user?.email || email;
         
         console.log("[MCP build_app] Starting build request:", {
-          email,
+          providedEmail: email,
+          authenticatedEmail: session?.user?.email,
+          finalEmail: userEmail,
           hasSession: !!session,
           hasAuthToken: !!authToken,
-          sessionEmail: session?.user?.email,
         });
         
         // Validate inputs
-        if (!email) {
+        if (!userEmail) {
           return {
-            content: [{ type: "text", text: "Email is required to build an app." }],
+            content: [{ 
+              type: "text", 
+              text: "Email is required to build an app. Please provide your email or authenticate first using the authenticate tool." 
+            }],
             structuredContent: { error: "Email is required" },
           };
         }
@@ -479,30 +578,23 @@ const handler = createMcpHandler(async (server) => {
           };
         }
         
-        // If we have a session, verify email matches
-        if (session?.user?.email && session.user.email !== email) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Email mismatch. You are authenticated as ${session.user.email}, but provided ${email}. Please use the correct email or re-authenticate.`,
-              },
-            ],
-            structuredContent: {
-              error: "Email mismatch",
-              authenticatedEmail: session.user.email,
-              providedEmail: email,
-            },
-          };
+        // If we have a session and provided email doesn't match, warn but use authenticated email
+        if (session?.user?.email && email && session.user.email !== email) {
+          console.warn("[MCP build_app] Email mismatch - using authenticated email:", {
+            authenticated: session.user.email,
+            provided: email,
+          });
+          // Use authenticated email instead of provided one
         }
 
         const url = `${websiteURL}/api/mcp/build-app`;
         
         console.log("[MCP build_app] Calling URL:", url);
         console.log("[MCP build_app] Request details:", {
-          email,
+          email: userEmail, // Use the resolved email (authenticated or provided)
           hasAuthToken: !!authToken,
           hasSession: !!session,
+          usingAuthenticatedEmail: !!session?.user?.email,
         });
         
         // Call the API - backend will handle authentication
@@ -514,7 +606,7 @@ const handler = createMcpHandler(async (server) => {
             ...(authToken && { "Authorization": `Bearer ${authToken}` }),
           },
           body: JSON.stringify({ 
-            email, 
+            email: userEmail, // Use resolved email (authenticated or provided)
             prompt, 
             ...(session && { session }), // Include session if available
           }),
@@ -578,20 +670,67 @@ const handler = createMcpHandler(async (server) => {
     "check_credits",
     {
       title: "Check Credits",
-      description: "Check available credits for a user in blackbox-v0cc",
+      description: "Check available credits for a user in blackbox-v0cc. If authenticated, uses your email automatically.",
       inputSchema: {
-        email: z.string().email().describe("The email address of the user to check credits for"),
+        email: z.string().email().optional().describe("The email address of the user to check credits for (optional if authenticated)"),
       },
     },
     async ({ email }) => {
       try {
-        const url = `${websiteURL}/api/mcp/credits?email=${encodeURIComponent(email)}`;
+        // Try to get authenticated session FIRST (supports both cookies and Redis)
+        // Pass email to allow Redis lookup for server-to-server requests
+        const session = await getAuthenticatedSession(email);
+        const cookieStore = await cookies();
+        let authToken = cookieStore.get("auth_token")?.value;
+        
+        // If no token in cookies but we have email, try Redis
+        if (!authToken && email) {
+          try {
+            const { getUserTokens } = await import("@/lib/token-storage");
+            const storedTokens = await getUserTokens(email);
+            if (storedTokens?.access_token) {
+              authToken = storedTokens.access_token;
+              console.log("[MCP check_credits] ✅ Retrieved token from Redis storage");
+            }
+          } catch (redisError) {
+            console.error("[MCP check_credits] Error retrieving token from Redis:", redisError);
+          }
+        }
+        
+        // Use authenticated user's email if available, otherwise use provided email
+        const userEmail = session?.user?.email || email;
+        
+        console.log("[MCP check_credits] Request:", {
+          providedEmail: email,
+          authenticatedEmail: session?.user?.email,
+          finalEmail: userEmail,
+          hasSession: !!session,
+          hasAuthToken: !!authToken,
+        });
+        
+        if (!userEmail) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Email is required to check credits. Please provide your email or authenticate first using the authenticate tool.",
+              },
+            ],
+            structuredContent: {
+              error: "Email is required",
+            },
+          };
+        }
+        
+        const url = `${websiteURL}/api/mcp/credits?email=${encodeURIComponent(userEmail)}`;
         console.log("[MCP check_credits] Calling URL:", url);
+        console.log("[MCP check_credits] Using auth token:", !!authToken);
         
         const response = await fetchWithNgrokSupport(url, {
           method: "GET",
           headers: {
             "Content-Type": "application/json",
+            ...(authToken && { "Authorization": `Bearer ${authToken}` }),
           },
         });
 
@@ -616,14 +755,15 @@ const handler = createMcpHandler(async (server) => {
           content: [
             {
               type: "text",
-              text: `Credits for ${email}:\n\nAvailable: ${creditsText}\nHas Payment Method: ${paymentMethodText}${data.customerId ? `\nCustomer ID: ${data.customerId}` : ""}`,
+              text: `Credits for ${userEmail}:\n\nAvailable: ${creditsText}\nHas Payment Method: ${paymentMethodText}${data.customerId ? `\nCustomer ID: ${data.customerId}` : ""}`,
             },
           ],
           structuredContent: {
             credits: data.credits || 0,
             customerId: data.customerId || null,
             hasPaymentMethod: data.hasPaymentMethod || false,
-            email,
+            email: userEmail, // Use resolved email
+            usingAuthenticatedEmail: !!session?.user?.email,
           },
         };
       } catch (error) {

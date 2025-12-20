@@ -101,12 +101,36 @@ export async function DELETE() {
   try {
     const cookieStore = await cookies();
     
+    // Get email from session before clearing cookies
+    const userSession = cookieStore.get("user_session")?.value;
+    let userEmail: string | null = null;
+    
+    if (userSession) {
+      try {
+        const parsed = JSON.parse(userSession);
+        userEmail = parsed?.user?.email || null;
+      } catch {
+        // Ignore parse errors
+      }
+    }
+    
     // Clear all auth cookies
     cookieStore.delete("auth_token");
     cookieStore.delete("refresh_token");
     cookieStore.delete("user_session");
     cookieStore.delete("oauth_state");
     cookieStore.delete("oauth_return_url");
+    
+    // Also clear Redis storage if email is available
+    if (userEmail) {
+      try {
+        const { deleteUserTokens } = await import("@/lib/token-storage");
+        await deleteUserTokens(userEmail);
+        console.log("[Auth Session] ✅ Cleared tokens from Redis storage for:", userEmail);
+      } catch (redisError) {
+        console.warn("[Auth Session] Failed to clear Redis storage (non-critical):", redisError);
+      }
+    }
     
     return NextResponse.json({ success: true, authenticated: false });
   } catch (error) {

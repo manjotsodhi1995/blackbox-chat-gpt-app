@@ -69,6 +69,27 @@ export async function GET(request: Request) {
         sessionEmail: session?.user?.email,
       });
       
+      // Store tokens in Redis for server-to-server requests (if Redis is available)
+      if (session?.user?.email && access_token) {
+        try {
+          const { storeUserTokens } = await import("@/lib/token-storage");
+          const expiresAt = expires_in 
+            ? Math.floor(Date.now() / 1000) + expires_in 
+            : Math.floor(Date.now() / 1000) + 3600; // Default 1 hour
+          
+          await storeUserTokens(session.user.email, {
+            access_token,
+            refresh_token,
+            expires_at: expiresAt,
+            session: session,
+          });
+          console.log("[Auth Callback] ✅ Stored tokens in Redis for server-to-server requests");
+        } catch (storageError) {
+          console.warn("[Auth Callback] Failed to store tokens in Redis (non-critical):", storageError);
+          // Non-critical - cookies will still work for browser requests
+        }
+      }
+      
       // Store tokens securely in cookies
       // Use secure cookies only for HTTPS (production or ngrok)
       const isSecure = baseURL.startsWith("https://");
