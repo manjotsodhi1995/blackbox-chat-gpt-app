@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
+import { baseURL } from "@/baseUrl";
+import { websiteURL } from "@/websiteUrl";
+import { randomBytes } from "crypto";
 
 /**
- * OAuth 2.0 Dynamic Client Registration - NOT SUPPORTED
+ * OAuth 2.0 Dynamic Client Registration (RFC 7591)
  * 
- * This server does not support RFC 7591 Dynamic Client Registration.
- * Clients should use the public client flow without client registration.
+ * Allows clients (like ChatGPT) to dynamically register with the OAuth server.
+ * Returns client_id and client_secret for the client to use.
  * 
- * The absence of registration_endpoint in the OAuth discovery metadata
- * indicates that clients should proceed with authentication without
- * dynamic registration.
+ * For MCP servers, we use a simplified registration that returns a static
+ * client configuration since we don't need per-client secrets.
  */
 
 // Handle OPTIONS for CORS preflight
@@ -24,28 +26,88 @@ export async function OPTIONS() {
   });
 }
 
-// GET and POST both return error indicating registration is not supported
-const notSupportedResponse = () => {
-  return NextResponse.json(
-    { 
-      error: "unsupported_operation",
-      error_description: "Dynamic client registration (RFC 7591) is not supported. Please use the public client OAuth flow without registration."
-    },
-    { 
-      status: 501, // Not Implemented
+export async function POST(request: Request) {
+  try {
+    const body = await request.json().catch(() => ({}));
+    
+    // Extract client metadata from request
+    const {
+      client_name,
+      redirect_uris = [],
+      grant_types = ["authorization_code"],
+      response_types = ["code"],
+      scope,
+      token_endpoint_auth_method = "none",
+    } = body;
+
+    // Generate client ID (for tracking, but not strictly required)
+    const clientId = `mcp_${randomBytes(16).toString("hex")}`;
+    
+    // For MCP servers, we don't require client_secret
+    // The OAuth flow uses public client flow (no secret needed)
+    // This is common for MCP servers
+    
+    // Build redirect URIs - use MCP server callback URL
+    const defaultRedirectUri = `${baseURL}/api/auth/callback`;
+    const finalRedirectUris = redirect_uris.length > 0 
+      ? redirect_uris 
+      : [defaultRedirectUri];
+
+    // Return client registration response (RFC 7591)
+    // Note: According to RFC 7591, client_secret is optional for public clients
+    return NextResponse.json({
+      client_id: clientId,
+      client_id_issued_at: Math.floor(Date.now() / 1000),
+      redirect_uris: finalRedirectUris,
+      grant_types: grant_types,
+      response_types: response_types,
+      client_name: client_name || "ChatGPT MCP Client",
+      scope: scope || "openid profile email",
+      token_endpoint_auth_method: token_endpoint_auth_method,
+      application_type: "web",
+      // Additional metadata (optional per RFC 7591)
+      client_uri: baseURL,
+      logo_uri: `${baseURL}/logo.png`,
+      policy_uri: `${baseURL}/privacy`,
+      tos_uri: `${baseURL}/terms`,
+    }, {
       headers: {
         "Content-Type": "application/json",
         "Cache-Control": "no-store",
         "Access-Control-Allow-Origin": "*",
-      }
-    }
-  );
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      },
+      status: 201, // Created - RFC 7591 requires 201 for successful registration
+    });
+  } catch (error) {
+    console.error("[OAuth Registration] Error:", error);
+    return NextResponse.json(
+      { 
+        error: "invalid_client_metadata",
+        error_description: "Invalid client registration request"
+      },
+      { status: 400 }
+    );
+  }
 }
 
+/**
+ * GET endpoint for registration endpoint discovery
+ * Returns the registration endpoint URL
+ */
 export async function GET() {
-  return notSupportedResponse();
-}
-
-export async function POST(request: Request) {
-  return notSupportedResponse();
+  return NextResponse.json({
+    registration_endpoint: `${baseURL}/.well-known/oauth-registration`,
+    registration_endpoint_auth_methods_supported: ["none"],
+    scopes_supported: ["openid", "profile", "email"],
+  }, {
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "public, max-age=3600",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    },
+  });
 }

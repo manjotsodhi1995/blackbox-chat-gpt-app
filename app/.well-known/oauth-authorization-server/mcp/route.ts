@@ -28,18 +28,24 @@ export async function GET() {
     const tokenEndpoint = `${websiteURL}/api/auth/token`;
     const introspectionEndpoint = `${websiteURL}/api/auth/verify`;
     
-    // Response - No Dynamic Client Registration (RFC 7591)
-    // MCP OAuth works with public client flow without dynamic registration
+    // Dynamic Client Registration endpoint (RFC 7591)
+    // ChatGPT checks the MCP server URL directly, so the registration endpoint
+    // should be on the MCP server domain (baseURL), not the issuer domain.
+    // The registration endpoint is already implemented on the MCP server.
+    const registrationEndpoint = `${baseURL}/.well-known/oauth-registration`;
+    
     return NextResponse.json({
       issuer: websiteURL,
       authorization_endpoint: authorizationEndpoint,
       token_endpoint: tokenEndpoint,
       introspection_endpoint: introspectionEndpoint,
+      registration_endpoint: registrationEndpoint, // RFC 7591
+      registration_endpoint_auth_methods_supported: ["none"], // RFC 7591 - indicates registration is supported
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256", "plain"],
       scopes_supported: ["openid", "profile", "email"],
-      token_endpoint_auth_methods_supported: ["none"],
+      token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
       response_modes_supported: ["query"],
       subject_types_supported: ["public"],
       id_token_signing_alg_values_supported: ["HS256", "RS256"],
