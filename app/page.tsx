@@ -1,7 +1,8 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { useEffect, Suspense } from "react";
 import {
   useWidgetProps,
   useMaxHeight,
@@ -10,7 +11,74 @@ import {
   useIsChatGptApp,
 } from "./hooks";
 
-export default function Home() {
+function MCPAuthHandler() {
+  const searchParams = useSearchParams();
+  
+  useEffect(() => {
+    // Check if this is an OAuth authorization request from ChatGPT
+    const responseType = searchParams.get('response_type');
+    const clientId = searchParams.get('client_id');
+    const redirectUri = searchParams.get('redirect_uri');
+    const state = searchParams.get('state');
+    const scope = searchParams.get('scope');
+    const codeChallenge = searchParams.get('code_challenge');
+    const codeChallengeMethod = searchParams.get('code_challenge_method');
+    const resource = searchParams.get('resource');
+    
+    if (responseType === 'code' && clientId && redirectUri) {
+      // This is an OAuth authorization request from ChatGPT
+      // Generate MCP session ID if not provided
+      let mcpSessionId = searchParams.get('mcp_session_id');
+      if (!mcpSessionId) {
+        mcpSessionId = `mcp_${crypto.randomUUID()}`;
+      }
+      
+      // Redirect the entire request to Better Auth server
+      const betterAuthUrl = process.env.NEXT_PUBLIC_BETTER_AUTH_URL;
+      const authUrl = new URL('/', betterAuthUrl);
+      
+      // Add MCP session tracking
+      authUrl.searchParams.set('mcp_session_id', mcpSessionId);
+      authUrl.searchParams.set('mcp_auth_required', 'true');
+      
+      // Forward all OAuth parameters
+      authUrl.searchParams.set('response_type', responseType);
+      authUrl.searchParams.set('client_id', clientId);
+      authUrl.searchParams.set('redirect_uri', redirectUri);
+      if (state) authUrl.searchParams.set('state', state);
+      if (scope) authUrl.searchParams.set('scope', scope);
+      if (codeChallenge) authUrl.searchParams.set('code_challenge', codeChallenge);
+      if (codeChallengeMethod) authUrl.searchParams.set('code_challenge_method', codeChallengeMethod);
+      if (resource) authUrl.searchParams.set('resource', resource);
+      
+      console.log('[MCP OAuth] Redirecting to Better Auth:', authUrl.toString());
+      window.location.href = authUrl.toString();
+      return;
+    }
+    
+    // Original MCP auth flow
+    const mcpSessionId = searchParams.get('mcp_session_id');
+    const mcpAuthRequired = searchParams.get('mcp_auth_required');
+    
+    if (mcpSessionId && mcpAuthRequired === 'true') {
+      // Redirect to Better Auth sign-in with callback
+      const betterAuthUrl = process.env.NEXT_PUBLIC_BETTER_AUTH_URL;
+      const callbackUrl = `${window.location.origin}/api/auth/mcp-callback?mcp_session_id=${mcpSessionId}`;
+
+      const authUrl = new URL('/', betterAuthUrl);
+      authUrl.searchParams.set('mcp_session_id', mcpSessionId);
+      authUrl.searchParams.set('mcp_auth_required', 'true');
+      authUrl.searchParams.set('callbackURL', callbackUrl);
+      
+      // Redirect to Better Auth
+      window.location.href = authUrl.toString();
+    }
+  }, [searchParams]);
+  
+  return null;
+}
+
+function HomeContent() {
   const toolOutput = useWidgetProps<{
     name?: string;
     result?: { structuredContent?: { name?: string } };
@@ -110,5 +178,14 @@ export default function Home() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={null}>
+      <MCPAuthHandler />
+      <HomeContent />
+    </Suspense>
   );
 }

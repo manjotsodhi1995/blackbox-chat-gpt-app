@@ -2,6 +2,12 @@ import { baseURL } from "@/baseUrl";
 import { websiteURL } from "@/websiteUrl";
 import { createMcpHandler } from "mcp-handler";
 import { z } from "zod";
+import { extractMCPSessionId, generateMCPSessionId } from "@/lib/mcp/session-extractor";
+import { mcpSessionStore } from "@/lib/auth/session-store";
+import { validateAuthToken, refreshAuthToken } from "@/lib/auth/token-handler";
+import { getBetterAuthUrl } from "@/lib/auth/get-auth-url";
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
 const getAppsSdkCompatibleHtml = async (baseUrl: string, path: string) => {
   const result = await fetch(`${baseUrl}${path}`);
@@ -29,6 +35,158 @@ function widgetMeta(widget: ContentWidget) {
   } as const;
 }
 
+/**
+ * Create MCP handler with authentication.
+ * 
+ * Flow:
+ * 1. Extract or generate MCP session ID
+ * 2. Check if session is authenticated
+ * 3. If not authenticated, return auth URL in error response
+ * 4. If authenticated, register tools with auth token
+ */
+const createAuthenticatedMcpHandler = () => {
+  return async (request: NextRequest) => {
+    // Handle OAuth discovery requests
+    const url = new URL(request.url);
+    if (url.pathname.includes('.well-known')) {
+      // Let the well-known routes handle OAuth discovery
+      return NextResponse.next();
+    }
+    
+    // Extract or generate MCP session ID
+    let mcpSessionId = extractMCPSessionId(request);
+    
+    // If no session ID found, generate one and store in response header
+    // This allows ChatGPT to reuse the session ID on subsequent requests
+    if (!mcpSessionId) {
+      mcpSessionId = generateMCPSessionId();
+    }
+    
+    // Check authentication status
+    const mcpSession = mcpSessionStore.get(mcpSessionId);
+    
+    if (!mcpSession) {
+      // Check if this is an MCP JSON-RPC request
+      if (request.method === 'POST') {
+        try {
+          const body = await request.clone().json();
+          
+          // Handle initialize method - return OAuth capabilities
+          if (body.method === 'initialize') {
+            const authUrl = new URL(baseURL);
+            authUrl.searchParams.set('mcp_session_id', mcpSessionId);
+            authUrl.searchParams.set('mcp_auth_required', 'true');
+            
+            const betterAuthUrl = getBetterAuthUrl();
+            const mcpServerUrl = new URL('/mcp', baseURL).toString();
+            
+            return NextResponse.json({
+              jsonrpc: '2.0',
+              result: {
+                protocolVersion: '2024-11-05',
+                capabilities: {
+                  tools: {},
+                  // Declare OAuth support
+                  experimental: {
+                    oauth: {
+                      authorizationServerMetadataUrl: `${baseURL}/.well-known/oauth-authorization-server/mcp`,
+                      protectedResourceMetadataUrl: `${baseURL}/.well-known/oauth-protected-resource/mcp`,
+                      clientRegistrationUrl: `${baseURL}/api/auth/oauth/register`,
+                    },
+                  },
+                },
+                serverInfo: {
+                  name: 'blackbox-mcp-server',
+                  version: '1.0.0',
+                },
+              },
+              id: body.id,
+            }, {
+              headers: {
+                'X-MCP-Session-ID': mcpSessionId,
+              },
+            });
+          }
+          
+          // For other methods, return an authentication error
+          return NextResponse.json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32002,
+              message: 'Authentication required',
+              data: {
+                authUrl: `${baseURL}?mcp_session_id=${mcpSessionId}&mcp_auth_required=true`,
+                oauth: {
+                  authorizationServerMetadataUrl: `${baseURL}/.well-known/oauth-authorization-server/mcp`,
+                  protectedResourceMetadataUrl: `${baseURL}/.well-known/oauth-protected-resource/mcp`,
+                },
+              },
+            },
+            id: body.id,
+          }, {
+            status: 401,
+            headers: {
+              'X-MCP-Session-ID': mcpSessionId,
+              'WWW-Authenticate': `Bearer realm="${baseURL}/mcp"`,
+            },
+          });
+        } catch (error) {
+          // If body parsing fails, return a generic auth error
+          return NextResponse.json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32002,
+              message: 'Authentication required',
+            },
+            id: null,
+          }, {
+            status: 401,
+            headers: {
+              'X-MCP-Session-ID': mcpSessionId,
+            },
+          });
+        }
+      }
+      
+      // For GET requests or non-JSON-RPC requests, redirect to auth
+      const authUrl = new URL(baseURL);
+      authUrl.searchParams.set('mcp_session_id', mcpSessionId);
+      authUrl.searchParams.set('mcp_auth_required', 'true');
+      
+      return NextResponse.redirect(authUrl.toString(), {
+        headers: {
+          "X-MCP-Session-ID": mcpSessionId,
+        },
+      });
+    }
+    
+    // Validate and refresh token if needed
+    const validation = await validateAuthToken(mcpSession.authSessionToken);
+    if (!validation.valid || !validation.session) {
+      // Token invalid - clear session and require re-auth
+      mcpSessionStore.delete(mcpSessionId);
+      const authUrl = new URL(baseURL);
+      authUrl.searchParams.set('mcp_session_id', mcpSessionId);
+      authUrl.searchParams.set('mcp_auth_required', 'true');
+      
+      // Redirect directly to auth URL
+      return NextResponse.redirect(authUrl.toString(), {
+        headers: {
+          "X-MCP-Session-ID": mcpSessionId,
+        },
+      });
+    }
+    
+    // Refresh token if needed
+    if (validation.needsRefresh) {
+      const newToken = await refreshAuthToken(mcpSession.authSessionToken);
+      if (newToken) {
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+        mcpSessionStore.set(mcpSessionId, newToken, mcpSession.userId, expiresAt);
+      }
+    }
+    
+    // Session authenticated - create MCP handler with auth context
 const handler = createMcpHandler(async (server) => {
   const html = await getAppsSdkCompatibleHtml(baseURL, "/");
 
@@ -99,42 +257,60 @@ const handler = createMcpHandler(async (server) => {
   );
 
   // Build App Tool
+      // Uses authenticated token from session store
   server.registerTool(
     "build_app",
     {
       title: "Build App",
       description: "Build an app in blackbox-v0cc with a prompt. Creates a new app project based on the provided prompt.",
       inputSchema: {
-        email: z.string().email().describe("The email address of the user building the app"),
         prompt: z.string().describe("The prompt describing what app to build"),
       },
     },
-    async ({ email, prompt }) => {
+        async ({ prompt }) => {
       try {
-        // Hardcoded session data
-        const session = {
-          user: {
-            name: 'Manjot Singh',
-            email: 'manjot.developer.singh@gmail.com',
-            image: 'https://lh3.googleusercontent.com/a/ACg8ocIkrnjRRyNOnywWdzJS7NzBypE5JapmH-_0XCRQeu26lxPY-Q=s96-c',
-            id: '4d1a58bd-d20c-4518-866b-18bc5d2a8113',
-            PhoneVerified: false,
-            customerId: 'cus_TPwkObTkcxoVCM'
-          },
-          expires: '2026-01-18T16:42:02.214Z',
-          isNewUser: false
-        };
+            // Get fresh session and validate
+            const currentSession = mcpSessionStore.get(mcpSessionId);
+            if (!currentSession) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Session not found. Please reconnect to the MCP server.",
+                  },
+                ],
+              };
+            }
+            
+            // Validate token
+            const validation = await validateAuthToken(currentSession.authSessionToken);
+            if (!validation.valid || !validation.session) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Authentication expired. Please reconnect to the MCP server.",
+                  },
+                ],
+              };
+            }
+            
+            const userEmail = validation.session.user?.email || '';
 
         const url = `${websiteURL}/api/mcp/build-app`;
         console.log("[MCP build_app] Calling URL:", url);
-        console.log("[MCP build_app] Request body:", { email, prompt, session });
+            console.log("[MCP build_app] User:", userEmail);
         
         const response = await fetch(url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+                "Cookie": `better-auth.session_token=${currentSession.authSessionToken}`, // Use Better Auth session token
           },
-          body: JSON.stringify({ email, prompt, session }),
+              body: JSON.stringify({ 
+                prompt,
+                email: userEmail,
+              }),
         });
 
         if (!response.ok) {
@@ -179,24 +355,53 @@ const handler = createMcpHandler(async (server) => {
   );
 
   // Check Credits Tool
+      // Uses authenticated token - checks credits for the authenticated user
   server.registerTool(
     "check_credits",
     {
       title: "Check Credits",
-      description: "Check available credits for a user in blackbox-v0cc",
-      inputSchema: {
-        email: z.string().email().describe("The email address of the user to check credits for"),
+          description: "Check available credits for the authenticated user in blackbox-v0cc",
+          inputSchema: {},
+        },
+        async () => {
+          try {
+            // Get fresh session and validate
+            const currentSession = mcpSessionStore.get(mcpSessionId);
+            if (!currentSession) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Session not found. Please reconnect to the MCP server.",
+                  },
+                ],
+              };
+            }
+            
+            // Validate token
+            const validation = await validateAuthToken(currentSession.authSessionToken);
+            if (!validation.valid || !validation.session) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Authentication expired. Please reconnect to the MCP server.",
       },
-    },
-    async ({ email }) => {
-      try {
-        const url = `${websiteURL}/api/mcp/credits?email=${encodeURIComponent(email)}`;
+                ],
+              };
+            }
+            
+            const userEmail = validation.session.user?.email || '';
+            
+            const url = `${websiteURL}/api/mcp/credits?email=${encodeURIComponent(userEmail)}`;
         console.log("[MCP check_credits] Calling URL:", url);
+            console.log("[MCP check_credits] User:", userEmail);
         
         const response = await fetch(url, {
           method: "GET",
           headers: {
             "Content-Type": "application/json",
+                "Cookie": `better-auth.session_token=${currentSession.authSessionToken}`, // Use Better Auth session token
           },
         });
 
@@ -221,14 +426,14 @@ const handler = createMcpHandler(async (server) => {
           content: [
             {
               type: "text",
-              text: `Credits for ${email}:\n\nAvailable: ${creditsText}\nHas Payment Method: ${paymentMethodText}${data.customerId ? `\nCustomer ID: ${data.customerId}` : ""}`,
+                  text: `Credits for ${userEmail}:\n\nAvailable: ${creditsText}\nHas Payment Method: ${paymentMethodText}${data.customerId ? `\nCustomer ID: ${data.customerId}` : ""}`,
             },
           ],
           structuredContent: {
             credits: data.credits || 0,
             customerId: data.customerId || null,
             hasPaymentMethod: data.hasPaymentMethod || false,
-            email,
+                email: userEmail,
           },
         };
       } catch (error) {
@@ -245,5 +450,17 @@ const handler = createMcpHandler(async (server) => {
   );
 });
 
-export const GET = handler;
-export const POST = handler;
+    // Execute the MCP handler with the request
+    // The handler needs access to the request, so we pass it through
+    // Note: mcp-handler may need to be modified to accept request context
+    // For now, we'll use a workaround by storing session ID in a way the handler can access
+    
+    return handler(request);
+  };
+};
+
+// Create the authenticated handler
+const authenticatedHandler = createAuthenticatedMcpHandler();
+
+export const GET = authenticatedHandler;
+export const POST = authenticatedHandler;
