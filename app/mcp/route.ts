@@ -89,6 +89,33 @@ async function validateToken(token: string): Promise<{
   }
 }
 
+/**
+ * Get authentication instructions message for users without tokens
+ */
+function getAuthenticationInstructions(): string {
+  const apiKeysUrl = `${websiteURL}/api-keys`;
+  return `🔐 Authentication Required
+
+To use this tool, you need to generate an API key first. Here's how:
+
+1. **Generate an API Key:**
+   - Visit: ${apiKeysUrl}
+   - Sign in if needed
+   - Click "Create API Key"
+   - Enter a name (e.g., "MCP ChatGPT Integration")
+   - Copy the generated key immediately (it's only shown once!)
+   - The key starts with "bbai_"
+
+2. **Provide the API Key:**
+   - Share your API key with me
+   - I'll automatically use it for all authenticated tool calls
+   - You can also call the "authenticate" tool to get detailed instructions
+
+**🔗 API Keys Page:** ${apiKeysUrl}
+
+**Quick Start:** Call the "authenticate" tool to get step-by-step instructions and the direct link to generate your API key.`;
+}
+
 const handler = createMcpHandler(async (server) => {
   const html = await getAppsSdkCompatibleHtml(baseURL, "/");
 
@@ -179,9 +206,14 @@ const handler = createMcpHandler(async (server) => {
             content: [
               {
                 type: "text",
-                text: "Authentication required. Please provide an API token in the Authorization header (Bearer <token>) or as the 'token' parameter.",
+                text: getAuthenticationInstructions(),
               },
             ],
+            structuredContent: {
+              requiresAuthentication: true,
+              authenticationUrl: `${websiteURL}/api-keys`,
+              message: "Please generate an API key to use this tool",
+            },
           };
         }
 
@@ -195,9 +227,15 @@ const handler = createMcpHandler(async (server) => {
               content: [
                 {
                   type: "text",
-                  text: `Invalid token: ${validationResult.error || 'Token validation failed'}`,
+                  text: `Invalid token: ${validationResult.error || 'Token validation failed'}\n\n${getAuthenticationInstructions()}`,
                 },
               ],
+              structuredContent: {
+                requiresAuthentication: true,
+                authenticationUrl: `${websiteURL}/api-keys`,
+                error: validationResult.error || 'Token validation failed',
+                message: "Please generate a new API key or check your existing key.",
+              },
             };
           }
           userEmail = validationResult.user.email;
@@ -211,9 +249,14 @@ const handler = createMcpHandler(async (server) => {
             content: [
               {
                 type: "text",
-                text: "Unable to determine user email from token. Please ensure you have provided a valid authentication token.",
+                text: `Unable to determine user email from token. Please ensure you have provided a valid authentication token.\n\n${getAuthenticationInstructions()}`,
               },
             ],
+            structuredContent: {
+              requiresAuthentication: true,
+              authenticationUrl: `${websiteURL}/api-keys`,
+              message: "Invalid or expired token. Please generate a new API key.",
+            },
           };
         }
 
@@ -294,9 +337,14 @@ const handler = createMcpHandler(async (server) => {
             content: [
               {
                 type: "text",
-                text: "Authentication required. Please provide an API token in the Authorization header (Bearer <token>) or as the 'token' parameter.",
+                text: getAuthenticationInstructions(),
               },
             ],
+            structuredContent: {
+              requiresAuthentication: true,
+              authenticationUrl: `${websiteURL}/api-keys`,
+              message: "Please generate an API key to use this tool",
+            },
           };
         }
 
@@ -310,9 +358,15 @@ const handler = createMcpHandler(async (server) => {
               content: [
                 {
                   type: "text",
-                  text: `Invalid token: ${validationResult.error || 'Token validation failed'}`,
+                  text: `Invalid token: ${validationResult.error || 'Token validation failed'}\n\n${getAuthenticationInstructions()}`,
                 },
               ],
+              structuredContent: {
+                requiresAuthentication: true,
+                authenticationUrl: `${websiteURL}/api-keys`,
+                error: validationResult.error || 'Token validation failed',
+                message: "Please generate a new API key or check your existing key.",
+              },
             };
           }
           userEmail = validationResult.user.email;
@@ -326,9 +380,14 @@ const handler = createMcpHandler(async (server) => {
             content: [
               {
                 type: "text",
-                text: "Unable to determine user email from token. Please ensure you have provided a valid authentication token.",
+                text: `Unable to determine user email from token. Please ensure you have provided a valid authentication token.\n\n${getAuthenticationInstructions()}`,
               },
             ],
+            structuredContent: {
+              requiresAuthentication: true,
+              authenticationUrl: `${websiteURL}/api-keys`,
+              message: "Invalid or expired token. Please generate a new API key.",
+            },
           };
         }
 
@@ -395,7 +454,7 @@ const handler = createMcpHandler(async (server) => {
     "authenticate",
     {
       title: "Authenticate",
-      description: "Get authentication instructions and link to generate an API key for MCP tool access. Users need to generate an API key and provide it to the AI for authenticated tool calls.",
+      description: "Get authentication instructions and link to generate an API key for MCP tool access. Returns a URL to the API keys management page where users can generate tokens for authenticated tool calls.",
       inputSchema: {
         email: z.string().email().optional().describe("Optional: Your email address for API key generation"),
       },
@@ -405,9 +464,9 @@ const handler = createMcpHandler(async (server) => {
       const instructions = `To authenticate and use MCP tools, follow these steps:
 
 1. **Visit the API Keys Page:**
-   Click this link to open the API key management page: ${apiKeysUrl}
+   🔗 ${apiKeysUrl}
    
-   You'll need to sign in if you haven't already.
+   Click the link above to open the API key management page. You'll need to sign in if you haven't already.
 
 2. **Generate a New API Key:**
    - Click the "Create API Key" button
