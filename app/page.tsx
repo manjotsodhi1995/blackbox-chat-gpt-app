@@ -9,6 +9,7 @@ import {
   useRequestDisplayMode,
   useIsChatGptApp,
 } from "./hooks";
+import ActivityDialog from "./components/ActivityDialog";
 
 export default function Home() {
   const toolOutput = useWidgetProps<{
@@ -98,6 +99,8 @@ export default function Home() {
           </li>
           <li className="mb-2 tracking-[-.01em]">MCP server path: /mcp</li>
         </ol>
+
+        <ActivityDialog />
 
         <div className="flex gap-4 items-center flex-col sm:flex-row">
           <Link
